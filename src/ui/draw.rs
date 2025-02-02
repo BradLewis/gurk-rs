@@ -1,6 +1,7 @@
 //! Draw the UI
 
 use std::fmt;
+use std::rc::Rc;
 
 use chrono::Datelike;
 use itertools::Itertools;
@@ -18,7 +19,7 @@ use ratatui::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use uuid::Uuid;
 
-use crate::app::App;
+use crate::app::{App, VimMode};
 use crate::channels::SelectChannel;
 use crate::command::{Command, WindowMode};
 use crate::cursor::Cursor;
@@ -45,6 +46,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_help(f, app, chunks[1]);
         return;
     }
+    let areas = if app.vim_mode_enabled {
+        Layout::default()
+            .constraints([Constraint::Min(0), Constraint::Length(3)].as_ref())
+            .direction(Direction::Vertical)
+            .split(f.area())
+    } else {
+        Rc::new([f.area()])
+    };
     let chunks = Layout::default()
         .constraints(
             [
@@ -54,13 +63,17 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             .as_ref(),
         )
         .direction(Direction::Horizontal)
-        .split(f.area());
+        .split(areas[0]);
 
     draw_channels(f, app, chunks[0]);
     draw_chat(f, app, chunks[1]);
 
     if app.select_channel.is_shown {
         draw_select_channel_popup(f, &mut app.select_channel);
+    }
+
+    if app.vim_mode_enabled {
+        draw_command_section(f, app, areas[1]);
     }
 }
 
@@ -221,6 +234,23 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
         f.set_cursor_position((
             chunks[1].x + cursor.col as u16 + 1,  // +1 for frame
             chunks[1].y + cursor.line as u16 + 1, // +1 for frame
+        ));
+    }
+}
+
+fn draw_command_section(f: &mut Frame, app: &mut App, area: Rect) {
+    let text: &str = if app.vim_mode == VimMode::Command {
+        app.command_input.data.as_ref()
+    } else {
+        app.command_output.as_ref()
+    };
+
+    let input = Paragraph::new(Text::from(text)).block(Block::default().borders(Borders::ALL));
+    f.render_widget(input, area);
+    if app.vim_mode == VimMode::Command {
+        f.set_cursor_position((
+            area.x + app.input.cursor.col as u16 + 1,  // +1 for frame
+            area.y + app.input.cursor.line as u16 + 1, // +1 for frame
         ));
     }
 }

@@ -39,6 +39,9 @@ pub struct Config {
     /// If set, the full message text will be colored, not only the author name
     #[serde(default)]
     pub colored_messages: bool,
+    // If set, enables vim mode for navigating the system
+    #[serde(default)]
+    pub vim_mode: bool,
     #[serde(default)]
     /// Keymaps
     pub keybindings: ModeKeybindingConfig,
@@ -85,6 +88,7 @@ impl Config {
             sqlite: Default::default(),
             passphrase: None,
             colored_messages: false,
+            vim_mode: false,
             default_keybindings: true,
             keybindings: ModeKeybindingConfig::default(),
         }

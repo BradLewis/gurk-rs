@@ -45,6 +45,13 @@ use crate::signal::{
 use crate::storage::{MessageId, Storage};
 use crate::util::{self, LazyRegex, StatefulList, ATTACHMENT_REGEX, URL_REGEX};
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum VimMode {
+    Normal,
+    Insert,
+    Command,
+}
+
 pub struct App {
     pub config: Config,
     signal_manager: Box<dyn SignalManager>,
@@ -67,6 +74,10 @@ pub struct App {
     // It is expensive to hit the signal manager contacts storage, so we cache it
     names_cache: Cell<Option<BTreeMap<Uuid, String>>>,
     pub mode_keybindings: ModeKeybinding,
+    pub vim_mode_enabled: bool,
+    pub vim_mode: VimMode,
+    pub command_input: Input,
+    pub command_output: String,
 }
 
 impl App {
@@ -108,6 +119,9 @@ impl App {
         let mode_keybindings = get_keybindings(&config.keybindings, config.default_keybindings)
             .expect("keybinding configuration failed");
 
+        //let vim_mode = config.vim_mode;
+        let vim_mode = true;
+
         let app = Self {
             config,
             signal_manager,
@@ -129,6 +143,10 @@ impl App {
             event_tx,
             names_cache: Default::default(),
             mode_keybindings,
+            vim_mode_enabled: vim_mode,
+            vim_mode: VimMode::Normal,
+            command_input: Default::default(),
+            command_output: "".to_string(),
         };
         Ok((app, event_rx))
     }
@@ -153,6 +171,8 @@ impl App {
     pub fn get_input(&mut self) -> &mut Input {
         if self.select_channel.is_shown {
             &mut self.select_channel.input
+        } else if self.vim_mode_enabled && self.vim_mode == VimMode::Command {
+            &mut self.command_input
         } else {
             &mut self.input
         }
@@ -351,7 +371,11 @@ impl App {
             match key.code {
                 KeyCode::Char('\r') => self.get_input().put_char('\n'),
                 KeyCode::Enter => {
-                    if !self.select_channel.is_shown {
+                    if self.vim_mode_enabled && self.vim_mode == VimMode::Command {
+                        self.execute_command().await;
+                        self.command_input.data.clear();
+                        self.vim_mode = VimMode::Normal;
+                    } else if !self.select_channel.is_shown {
                         if self.is_multiline_input {
                             self.get_input().new_line();
                         } else if !self.input.data.is_empty() {
@@ -381,12 +405,45 @@ impl App {
                     if !self.reset_editing() {
                         self.reset_message_selection();
                     }
+                    if self.vim_mode_enabled {
+                        self.vim_mode = VimMode::Normal;
+                    }
                 }
-                KeyCode::Char(c) => self.get_input().put_char(c),
+                KeyCode::Char(c) => {
+                    if self.vim_mode_enabled && self.vim_mode != VimMode::Command && c == ':' {
+                        self.vim_mode = VimMode::Command;
+                    }
+                    self.get_input().put_char(c);
+                }
                 _ => {}
             }
         }
         Ok(())
+    }
+
+    async fn execute_command(&mut self) {
+        let text: &str = self.command_input.data.as_ref();
+        if text.is_empty() {
+            self.command_output = "".to_string();
+            return;
+        }
+        let (command_text, params) = match text.split_once(" ") {
+            None => (text, None),
+            Some((first, second)) => (first, Some(second)),
+        };
+
+        let command = match command_text {
+            "q" | "quit" => Command::Quit,
+            _ => {
+                self.command_output = "unknown command".to_string();
+                return;
+            }
+        };
+
+        if let Err(err) = self.on_command(command).await {
+            self.command_output = format!("{}", err);
+            return;
+        }
     }
 
     /// Tries to open the first url in the selected message.
