@@ -25,7 +25,7 @@ use presage::proto::{
 use presage::proto::{AttachmentPointer, DataMessage, ReceiptMessage, SyncMessage, TypingMessage};
 use regex::Regex;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
 
 use crate::channels::SelectChannel;
@@ -440,14 +440,25 @@ impl App {
         }
         let (command_text, params) = match text.split_once(" ") {
             None => (text, None),
-            Some((first, second)) => (first, Some(second.to_string())),
+            Some((first, second)) => (first, Some(second)),
         };
 
         let command = match command_text {
             "q" | "quit" => Command::Quit,
             "open_file" => Command::OpenFile,
             "open_url" => Command::OpenUrl,
-            "react" => Command::React(params),
+            "react" => match params {
+                Some(p) => {
+                    let emoji = to_emoji(p);
+                    if let Some(e) = emoji {
+                        Command::React(Some(e.to_owned()))
+                    } else {
+                        self.command_output = format!("Invalid reaction {}", p);
+                        return;
+                    }
+                }
+                None => Command::React(None),
+            },
             _ => {
                 self.command_output = format!("Unknown command {}", command_text);
                 return;
@@ -533,6 +544,7 @@ impl App {
         channel_idx: usize,
         reaction: Option<String>,
     ) -> Option<()> {
+        trace!("Reaction: {:?}", reaction);
         let reaction = reaction.or_else(|| self.take_reaction()?);
         let channel = self.storage.channel(self.channels.items[channel_idx])?;
         let message = self.selected_message()?;
