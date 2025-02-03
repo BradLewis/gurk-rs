@@ -484,6 +484,15 @@ impl App {
                                 );
                                 self.on_command(command).await?;
                             }
+                            'p' => {
+                                if let Some(clipboard) = &mut self.clipboard {
+                                    let content = clipboard.get_text().context(anyhow!(""))?;
+                                    let multi_line_state = self.is_multiline_input;
+                                    self.is_multiline_input = true;
+                                    content.chars().for_each(|c| self.get_input().put_char(c));
+                                    self.is_multiline_input = multi_line_state;
+                                }
+                            }
                             _ => {}
                         }
                     }
