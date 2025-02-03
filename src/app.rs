@@ -25,7 +25,7 @@ use presage::proto::{
 use presage::proto::{AttachmentPointer, DataMessage, ReceiptMessage, SyncMessage, TypingMessage};
 use regex::Regex;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::channels::SelectChannel;
@@ -119,8 +119,7 @@ impl App {
         let mode_keybindings = get_keybindings(&config.keybindings, config.default_keybindings)
             .expect("keybinding configuration failed");
 
-        //let vim_mode = config.vim_mode;
-        let vim_mode = true;
+        let vim_mode = config.vim_mode;
 
         let app = Self {
             config,
@@ -338,10 +337,10 @@ impl App {
                 }
             }
             Command::OpenUrl => {
-                self.try_open_url();
+                self.try_open_url().ok_or(anyhow!("Unable to open url"))?;
             }
             Command::OpenFile => {
-                self.try_open_file();
+                self.try_open_file().ok_or(anyhow!("Unable to open file"))?;
             }
             Command::DeleteCharacter(MoveDirection::Previous) => {
                 self.get_input().on_backspace();
@@ -365,13 +364,64 @@ impl App {
     }
 
     pub async fn on_key(&mut self, key: KeyEvent) -> anyhow::Result<()> {
+        if self.vim_mode_enabled {
+            return self.on_key_vim_mode(key).await;
+        }
+
         if let Some(cmd) = self.event_to_command(&key) {
             self.on_command(cmd.clone()).await?;
         } else {
             match key.code {
                 KeyCode::Char('\r') => self.get_input().put_char('\n'),
                 KeyCode::Enter => {
-                    if self.vim_mode_enabled && self.vim_mode == VimMode::Command {
+                    if !self.select_channel.is_shown {
+                        if self.is_multiline_input {
+                            self.get_input().new_line();
+                        } else if !self.input.data.is_empty() {
+                            if let Some(idx) = self.channels.state.selected() {
+                                self.send_input(idx);
+                            }
+                        } else {
+                            // input is empty
+                            self.try_open_url();
+                        }
+                    } else if self.select_channel.is_shown {
+                        if let Some(channel_id) = self.select_channel.selected_channel_id().copied()
+                        {
+                            self.select_channel.is_shown = false;
+                            let (idx, _) = self
+                                .channels
+                                .items
+                                .iter()
+                                .enumerate()
+                                .find(|(_, &id)| id == channel_id)
+                                .context("channel disappeared during channel select popup")?;
+                            self.channels.state.select(Some(idx));
+                        }
+                    }
+                }
+                KeyCode::Esc => {
+                    if !self.reset_editing() {
+                        self.reset_message_selection();
+                    }
+                }
+                KeyCode::Char(c) => {
+                    self.get_input().put_char(c);
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    async fn on_key_vim_mode(&mut self, key: KeyEvent) -> anyhow::Result<()> {
+        if let Some(cmd) = self.event_to_command(&key) {
+            self.on_command(cmd.clone()).await?;
+        } else {
+            match key.code {
+                KeyCode::Char('\r') => self.get_input().put_char('\n'),
+                KeyCode::Enter => {
+                    if self.vim_mode == VimMode::Command {
                         self.execute_command().await;
                         self.vim_mode = VimMode::Normal;
                     } else if !self.select_channel.is_shown {
@@ -404,25 +454,45 @@ impl App {
                     if !self.reset_editing() {
                         self.reset_message_selection();
                     }
-                    if self.vim_mode_enabled {
-                        self.vim_mode = VimMode::Normal;
+                    if self.vim_mode == VimMode::Command {
                         self.command_input.reset();
                     }
+                    self.vim_mode = VimMode::Normal;
                 }
                 KeyCode::Char(c) => {
-                    if self.vim_mode_enabled && self.vim_mode != VimMode::Command && c == ':' {
-                        self.vim_mode = VimMode::Command;
-                    }
-                    self.get_input().put_char(c);
-                    if self.vim_mode_enabled
-                        && self.vim_mode == VimMode::Command
-                        && self.get_input().is_empty()
-                    {
-                        self.vim_mode = VimMode::Normal;
+                    if self.vim_mode != VimMode::Normal {
+                        self.get_input().put_char(c);
+                    } else {
+                        match c {
+                            ':' => {
+                                self.vim_mode = VimMode::Command;
+                                self.get_input().put_char(c);
+                            }
+                            'i' => self.vim_mode = VimMode::Insert,
+                            // TODO: add these
+                            'j' => {
+                                let command = Command::SelectMessage(
+                                    MoveDirection::Next,
+                                    MoveAmountVisual::Entry,
+                                );
+                                self.on_command(command).await?;
+                            }
+                            'k' => {
+                                let command = Command::SelectMessage(
+                                    MoveDirection::Previous,
+                                    MoveAmountVisual::Entry,
+                                );
+                                self.on_command(command).await?;
+                            }
+                            _ => {}
+                        }
                     }
                 }
                 _ => {}
             }
+        }
+        if self.vim_mode == VimMode::Command && self.command_input.is_empty() {
+            self.vim_mode = VimMode::Normal;
         }
         Ok(())
     }
@@ -445,8 +515,9 @@ impl App {
 
         let command = match command_text {
             "q" | "quit" => Command::Quit,
-            "open_file" => Command::OpenFile,
-            "open_url" => Command::OpenUrl,
+            "h" | "help" => Command::Help,
+            "of" | "open_file" => Command::OpenFile,
+            "ou" | "open_url" => Command::OpenUrl,
             "react" => match params {
                 Some(p) => {
                     let emoji = to_emoji(p);
@@ -544,7 +615,6 @@ impl App {
         channel_idx: usize,
         reaction: Option<String>,
     ) -> Option<()> {
-        trace!("Reaction: {:?}", reaction);
         let reaction = reaction.or_else(|| self.take_reaction()?);
         let channel = self.storage.channel(self.channels.items[channel_idx])?;
         let message = self.selected_message()?;
@@ -1761,6 +1831,7 @@ fn open_file(message: &Message) -> Option<()> {
     if let Err(error) = opener::open(file) {
         let path = file.display().to_string();
         error!(path, %error, "failed to open");
+        return None;
     }
     Some(())
 }
