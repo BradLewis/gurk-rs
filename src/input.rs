@@ -74,4 +74,9 @@ impl Input {
         self.cursor = Default::default();
         std::mem::take(&mut self.data)
     }
+
+    pub fn reset(&mut self) {
+        self.cursor = Default::default();
+        self.data.clear();
+    }
 }

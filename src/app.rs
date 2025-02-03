@@ -373,7 +373,6 @@ impl App {
                 KeyCode::Enter => {
                     if self.vim_mode_enabled && self.vim_mode == VimMode::Command {
                         self.execute_command().await;
-                        self.command_input.data.clear();
                         self.vim_mode = VimMode::Normal;
                     } else if !self.select_channel.is_shown {
                         if self.is_multiline_input {
@@ -407,6 +406,7 @@ impl App {
                     }
                     if self.vim_mode_enabled {
                         self.vim_mode = VimMode::Normal;
+                        self.command_input.reset();
                     }
                 }
                 KeyCode::Char(c) => {
@@ -414,6 +414,12 @@ impl App {
                         self.vim_mode = VimMode::Command;
                     }
                     self.get_input().put_char(c);
+                    if self.vim_mode_enabled
+                        && self.vim_mode == VimMode::Command
+                        && self.get_input().is_empty()
+                    {
+                        self.vim_mode = VimMode::Normal;
+                    }
                 }
                 _ => {}
             }
@@ -422,20 +428,28 @@ impl App {
     }
 
     async fn execute_command(&mut self) {
-        let text: &str = self.command_input.data.as_ref();
+        let text = self.command_input.take();
+        let text: &str = text.as_ref();
+        let text = match text.strip_prefix(":") {
+            Some(t) => t,
+            None => return,
+        };
         if text.is_empty() {
             self.command_output = "".to_string();
             return;
         }
         let (command_text, params) = match text.split_once(" ") {
             None => (text, None),
-            Some((first, second)) => (first, Some(second)),
+            Some((first, second)) => (first, Some(second.to_string())),
         };
 
         let command = match command_text {
             "q" | "quit" => Command::Quit,
+            "open_file" => Command::OpenFile,
+            "open_url" => Command::OpenUrl,
+            "react" => Command::React(params),
             _ => {
-                self.command_output = "unknown command".to_string();
+                self.command_output = format!("Unknown command {}", command_text);
                 return;
             }
         };

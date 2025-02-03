@@ -245,12 +245,19 @@ fn draw_command_section(f: &mut Frame, app: &mut App, area: Rect) {
         app.command_output.as_ref()
     };
 
-    let input = Paragraph::new(Text::from(text)).block(Block::default().borders(Borders::ALL));
+    let title = match app.vim_mode {
+        VimMode::Normal => "Normal",
+        VimMode::Command => "Command",
+        VimMode::Insert => "Insert",
+    };
+
+    let input =
+        Paragraph::new(Text::from(text)).block(Block::default().borders(Borders::ALL).title(title));
     f.render_widget(input, area);
     if app.vim_mode == VimMode::Command {
         f.set_cursor_position((
-            area.x + app.input.cursor.col as u16 + 1,  // +1 for frame
-            area.y + app.input.cursor.line as u16 + 1, // +1 for frame
+            area.x + app.command_input.cursor.col as u16 + 1, // +1 for frame
+            area.y + app.command_input.cursor.line as u16 + 1, // +1 for frame
         ));
     }
 }
