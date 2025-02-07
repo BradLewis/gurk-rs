@@ -10,7 +10,7 @@ use std::path::Path;
 use anyhow::{anyhow, Context as _};
 use arboard::Clipboard;
 use crokey::Combiner;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use image::codecs::png::PngEncoder;
 use image::{ImageBuffer, ImageEncoder, Rgba};
 use itertools::Itertools;
@@ -52,6 +52,12 @@ pub enum VimMode {
     Command,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Window {
+    Channels,
+    Messages,
+}
+
 pub struct App {
     pub config: Config,
     signal_manager: Box<dyn SignalManager>,
@@ -78,6 +84,7 @@ pub struct App {
     pub vim_mode: VimMode,
     pub command_input: Input,
     pub command_output: String,
+    pub selected_window: Window,
 }
 
 impl App {
@@ -146,6 +153,7 @@ impl App {
             vim_mode: VimMode::Normal,
             command_input: Default::default(),
             command_output: "".to_string(),
+            selected_window: Window::Channels,
         };
         Ok((app, event_rx))
     }
@@ -420,36 +428,31 @@ impl App {
         } else {
             match key.code {
                 KeyCode::Char('\r') => self.get_input().put_char('\n'),
-                KeyCode::Enter => {
-                    if self.vim_mode == VimMode::Command {
+                KeyCode::Enter => match self.vim_mode {
+                    VimMode::Command => {
                         self.execute_command().await;
                         self.vim_mode = VimMode::Normal;
-                    } else if !self.select_channel.is_shown {
-                        if self.is_multiline_input {
+                    }
+                    VimMode::Insert => {
+                        // TODO: SHIFT+ENTER doesn't get mapped from alacritty to the application
+                        // Pick a different keybind for this?
+                        if key.modifiers == KeyModifiers::SHIFT {
+                            self.is_multiline_input = true;
                             self.get_input().new_line();
-                        } else if !self.input.data.is_empty() {
-                            if let Some(idx) = self.channels.state.selected() {
-                                self.send_input(idx);
-                            }
                         } else {
-                            // input is empty
-                            self.try_open_url();
-                        }
-                    } else if self.select_channel.is_shown {
-                        if let Some(channel_id) = self.select_channel.selected_channel_id().copied()
-                        {
-                            self.select_channel.is_shown = false;
-                            let (idx, _) = self
-                                .channels
-                                .items
-                                .iter()
-                                .enumerate()
-                                .find(|(_, &id)| id == channel_id)
-                                .context("channel disappeared during channel select popup")?;
-                            self.channels.state.select(Some(idx));
+                            if !self.input.data.is_empty() {
+                                if let Some(idx) = self.channels.state.selected() {
+                                    self.send_input(idx);
+                                }
+                            }
                         }
                     }
-                }
+                    VimMode::Normal => {
+                        if self.selected_window == Window::Channels {
+                            self.selected_window = Window::Messages
+                        }
+                    }
+                },
                 KeyCode::Esc => {
                     if !self.reset_editing() {
                         self.reset_message_selection();
@@ -457,7 +460,11 @@ impl App {
                     if self.vim_mode == VimMode::Command {
                         self.command_input.reset();
                     }
-                    self.vim_mode = VimMode::Normal;
+                    if self.vim_mode != VimMode::Normal {
+                        self.vim_mode = VimMode::Normal;
+                    } else {
+                        self.selected_window = Window::Channels;
+                    }
                 }
                 KeyCode::Char(c) => {
                     if self.vim_mode != VimMode::Normal {
@@ -471,17 +478,25 @@ impl App {
                             'i' => self.vim_mode = VimMode::Insert,
                             // TODO: add these
                             'j' => {
-                                let command = Command::SelectMessage(
-                                    MoveDirection::Next,
-                                    MoveAmountVisual::Entry,
-                                );
+                                let command = if self.selected_window == Window::Messages {
+                                    Command::SelectMessage(
+                                        MoveDirection::Next,
+                                        MoveAmountVisual::Entry,
+                                    )
+                                } else {
+                                    Command::SelectChannel(MoveDirection::Next)
+                                };
                                 self.on_command(command).await?;
                             }
                             'k' => {
-                                let command = Command::SelectMessage(
-                                    MoveDirection::Previous,
-                                    MoveAmountVisual::Entry,
-                                );
+                                let command = if self.selected_window == Window::Messages {
+                                    Command::SelectMessage(
+                                        MoveDirection::Previous,
+                                        MoveAmountVisual::Entry,
+                                    )
+                                } else {
+                                    Command::SelectChannel(MoveDirection::Previous)
+                                };
                                 self.on_command(command).await?;
                             }
                             'p' => {
@@ -683,6 +698,8 @@ impl App {
             .channel(channel_id)
             .expect("non-existent channel");
         let editing = self.editing.take();
+
+        // TODO: create a reply mode rather than replying to any selected message
         let quote = editing.is_none().then(|| self.selected_message()).flatten();
         let (sent_message, response) = self.signal_manager.send_text(
             &channel,

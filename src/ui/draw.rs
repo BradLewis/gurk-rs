@@ -19,7 +19,7 @@ use ratatui::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use uuid::Uuid;
 
-use crate::app::{App, VimMode};
+use crate::app::{App, VimMode, Window};
 use crate::channels::SelectChannel;
 use crate::command::{Command, WindowMode};
 use crate::cursor::Cursor;
@@ -139,8 +139,18 @@ fn draw_channels(f: &mut Frame, app: &mut App, area: Rect) {
             ListItem::new(vec![Line::from(Span::raw(label))])
         });
 
+    let title_style = if app.selected_window == Window::Channels {
+        Style::default().add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
     let channels = List::new(channels)
-        .block(Block::default().borders(Borders::ALL).title("Channels"))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Channels")
+                .title_style(title_style),
+        )
         .highlight_style(Style::default().fg(Color::Black).bg(Color::Gray));
     let no_channels = channels.is_empty();
     f.render_stateful_widget(channels, area, &mut app.channels.state);
@@ -227,8 +237,17 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
         (false, false) => "Input",
     };
 
-    let input = Paragraph::new(Text::from(wrapped_input))
-        .block(Block::default().borders(Borders::ALL).title(title));
+    let title_style = if app.vim_mode == VimMode::Insert {
+        Style::default().add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
+    let input = Paragraph::new(Text::from(wrapped_input)).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(title)
+            .title_style(title_style),
+    );
     f.render_widget(input, chunks[1]);
     if !app.select_channel.is_shown {
         f.set_cursor_position((
@@ -447,8 +466,18 @@ fn draw_messages(f: &mut Frame, app: &mut App, area: Rect) {
         "Messages".to_string()
     };
 
+    let title_style = if app.selected_window == Window::Messages {
+        Style::default().add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
     let list = List::new(items)
-        .block(Block::default().title(title).borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .title_style(title_style),
+        )
         .highlight_style(Style::default().fg(Color::Black).bg(Color::Gray))
         .direction(ListDirection::BottomToTop);
 
