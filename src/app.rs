@@ -367,6 +367,17 @@ impl App {
                 self.help_scroll.0 += 1
             }
             Command::NoOp => {}
+            Command::ReplyMessage(msg) => {
+                if msg.is_empty() {
+                    return Ok(());
+                }
+                let id = self
+                    .selected_message_id()
+                    .ok_or(anyhow!("No selected message"))?;
+                if let Some(idx) = self.channels.state.selected() {
+                    self.send_input(idx, &msg, Some(id));
+                }
+            }
         }
         Ok(())
     }
@@ -387,7 +398,8 @@ impl App {
                             self.get_input().new_line();
                         } else if !self.input.data.is_empty() {
                             if let Some(idx) = self.channels.state.selected() {
-                                self.send_input(idx);
+                                let msg = self.take_input();
+                                self.send_input(idx, &msg, None);
                             }
                         } else {
                             // input is empty
@@ -442,7 +454,8 @@ impl App {
                         } else {
                             if !self.input.data.is_empty() {
                                 if let Some(idx) = self.channels.state.selected() {
-                                    self.send_input(idx);
+                                    let msg = self.take_input();
+                                    self.send_input(idx, &msg, None);
                                 }
                             }
                         }
@@ -554,6 +567,13 @@ impl App {
                 }
                 None => Command::React(None),
             },
+            "reply" => match params {
+                Some(p) => Command::ReplyMessage(p.to_owned()),
+                None => {
+                    self.command_output = "No message to send".to_string();
+                    return;
+                }
+            },
             _ => {
                 self.command_output = format!("Unknown command {}", command_text);
                 return;
@@ -564,6 +584,7 @@ impl App {
             self.command_output = format!("{}", err);
             return;
         }
+        self.command_output.clear();
     }
 
     /// Tries to open the first url in the selected message.
@@ -689,9 +710,8 @@ impl App {
         self.get_input().take()
     }
 
-    fn send_input(&mut self, channel_idx: usize) {
-        let input = self.take_input();
-        let (input, attachments) = self.extract_attachments(&input);
+    fn send_input(&mut self, channel_idx: usize, msg: &str, reply_to: Option<MessageId>) {
+        let (input, attachments) = self.extract_attachments(&msg);
         let channel_id = self.channels.items[channel_idx];
         let channel = self
             .storage
@@ -699,8 +719,11 @@ impl App {
             .expect("non-existent channel");
         let editing = self.editing.take();
 
-        // TODO: create a reply mode rather than replying to any selected message
-        let quote = editing.is_none().then(|| self.selected_message()).flatten();
+        let quote = if let Some(id) = reply_to {
+            self.storage.message(id)
+        } else {
+            None
+        };
         let (sent_message, response) = self.signal_manager.send_text(
             &channel,
             input,
@@ -1949,7 +1972,8 @@ pub(crate) mod tests {
         for c in input.chars() {
             app.get_input().put_char(c);
         }
-        app.send_input(0);
+        let msg = app.take_input();
+        app.send_input(0, &msg, None);
 
         assert_eq!(sent_messages.borrow().len(), 1);
         let msg = sent_messages.borrow()[0].clone();
@@ -1977,7 +2001,8 @@ pub(crate) mod tests {
             app.get_input().put_char(c);
         }
 
-        app.send_input(0);
+        let msg = app.take_input();
+        app.send_input(0, &msg, None);
 
         assert_eq!(sent_messages.borrow().len(), 1);
         let msg = sent_messages.borrow()[0].clone();
@@ -2001,7 +2026,8 @@ pub(crate) mod tests {
             app.get_input().put_char(c);
         }
 
-        app.send_input(0);
+        let msg = app.take_input();
+        app.send_input(0, &msg, None);
 
         assert_eq!(sent_messages.borrow().len(), 1);
         let msg = sent_messages.borrow()[0].clone();

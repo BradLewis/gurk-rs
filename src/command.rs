@@ -225,7 +225,8 @@ pub enum Command {
     OpenUrl,
     #[strum(props(desc = "Try to open the first file attachment of the selected message"))]
     OpenFile,
-    // ReplyMessage,
+    #[strum(props(desc = "Reply to a message"))]
+    ReplyMessage(String),
     // DeleteMessage,
 }
 
